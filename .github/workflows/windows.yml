@@ -1,0 +1,64 @@
+name: CI Windows
+
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-11-arm
+
+    steps:
+    - name: Connect to Tailscale
+      uses: tailscale/github-action@v3
+      with:
+        oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+        oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+        tags: tag:ci
+        version: latest
+        use-cache: 'true'
+
+    - name: Enable RDP
+      env:
+        PASSWORD: ${{ secrets.PASSWORD }}
+      run: |
+        if (-not $env:PASSWORD) {
+          Write-Error "PASSWORD is not set"
+          exit 1
+        }
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "$env:PASSWORD" -Force)
+        $rdpService = Get-Service -Name TermService
+        Write-Host "RDP Service Status: $($rdpService.Status)"
+        $firewallRule = Get-NetFirewallRule -DisplayGroup "Remote Desktop" -Enabled True -ErrorAction SilentlyContinue
+        if ($firewallRule) {
+          Write-Host "RDP Firewall Rule: Enabled"
+        } else {
+          Write-Error "RDP Firewall Rule not enabled"
+          exit 1
+        }
+        $netstat = netstat -an | findstr :3389
+        Write-Host "Netstat 3389: $netstat"
+      shell: pwsh
+
+    - name: Output Tailscale Connection Details
+      env:
+        PASSWORD: ${{ secrets.PASSWORD }}
+      run: |
+        if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
+          Write-Error "Tailscale executable not found in PATH"
+          exit 1
+        }
+        $tailscaleIp = tailscale ip --4
+        if (-not $tailscaleIp) {
+          Write-Error "Failed to retrieve Tailscale IP, connection may not be established"
+          exit 1
+        }
+        $status = tailscale status
+        Write-Host "Tailscale status: $status"
+        Write-Host "RDP Connection: $tailscaleIp:3389"
+        Write-Host "Username: runneradmin"
+        Write-Host "Password: (use PASSWORD from secrets)"
+        Write-Host "RDP Access: Use the above IP and port in Remote Desktop client"
+        Start-Sleep -Seconds 21600
+      shell: pwsh
